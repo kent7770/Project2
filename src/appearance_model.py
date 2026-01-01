@@ -96,8 +96,9 @@ class AppearanceModel:
             
             self.mean = self.pca.mean_
             
-            # Set reference from mean of all patches (more robust than first patch)
-            self.reference_coefficients = np.mean(self.pca.transform(X), axis=0)
+            # Set reference from median of all patches (more robust than mean)
+            transformed = self.pca.transform(X)
+            self.reference_coefficients = np.median(transformed, axis=0)
             
             # Calculate initial reconstruction error statistics
             reconstructed = self.pca.inverse_transform(self.pca.transform(X))
@@ -195,7 +196,8 @@ class AppearanceModel:
         
         if method == 'euclidean':
             distance = np.linalg.norm(coefficients - self.reference_coefficients)
-            similarity = 1.0 / (1.0 + distance)
+            # Use exponential decay for scoring
+            similarity = np.exp(-distance / 5.0)  # Balanced for accuracy
             
         elif method == 'correlation':
             ref_norm = self.reference_coefficients / (np.linalg.norm(self.reference_coefficients) + 1e-10)
@@ -223,17 +225,19 @@ class AppearanceModel:
         elif method == 'combined':
             # Combine PCA distance and reconstruction error
             distance = np.linalg.norm(coefficients - self.reference_coefficients)
-            pca_sim = 1.0 / (1.0 + distance)
+            # Use exponential for scoring
+            pca_sim = np.exp(-distance / 5.0)  # Balanced for accuracy
             
             error = self.compute_reconstruction_error(patch)
             if error is None:
                 return pca_sim
             
-            normalized_error = (error - self.reconstruction_error_mean) / self.reconstruction_error_std
-            recon_sim = 1.0 / (1.0 + max(0, normalized_error))
+            normalized_error = (error - self.reconstruction_error_mean) / (self.reconstruction_error_std + 1e-10)
+            # More lenient reconstruction scoring
+            recon_sim = np.exp(-max(0, normalized_error) / 2.0)
             
-            # Weighted combination
-            similarity = 0.7 * pca_sim + 0.3 * recon_sim
+            # Weighted combination (favor reconstruction for accuracy)
+            similarity = 0.65 * pca_sim + 0.35 * recon_sim
             
         else:
             raise ValueError(f"Unknown similarity method: {method}")

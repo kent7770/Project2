@@ -7,6 +7,7 @@ import argparse
 import cv2
 import numpy as np
 import sys
+import time
 from pathlib import Path
 from src.pca_tracker import PCATracker, TrackingResult
 from src.utils import (
@@ -154,7 +155,8 @@ def run_tracking(args) -> dict:
         occlusion_threshold=args.occlusion_threshold,
         use_motion_model=not args.no_motion,
         use_multiscale=not args.no_multiscale,
-        use_hog=args.use_hog
+        use_hog=args.use_hog,
+        fast_mode=args.fast
     )
     
     success = tracker.initialize(first_frame, initial_bbox)
@@ -174,13 +176,26 @@ def run_tracking(args) -> dict:
     
     if args.display:
         print("Press 'q' to stop, 'p' to pause/resume, 's' to save current frame")
+
+        window_name = "Tracking"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        base_h, base_w = images[0].shape[:2]
+        if args.display_scale and args.display_scale > 0:
+            display_scale = float(args.display_scale)
+        else:
+            up = min(3.0, max(1.0, 900.0 / max(1, base_w), 650.0 / max(1, base_h)))
+            down = min(1.0, 1280.0 / max(1, base_w), 720.0 / max(1, base_h))
+            display_scale = up if up > 1.0 else down
+        cv2.resizeWindow(window_name, int(base_w * display_scale), int(base_h * display_scale))
     
     tracked_bboxes = []
     confidences = []
     trajectory = []
     paused = False
+    last_bbox = initial_bbox
     
     for i, frame in enumerate(images):
+        frame_start = time.perf_counter()
         if i == 0:
             # First frame - use initial bbox
             result = TrackingResult(
@@ -200,19 +215,31 @@ def run_tracking(args) -> dict:
             
             center = get_bbox_center(result.bbox)
             trajectory.append(center)
+            last_bbox = result.bbox
         else:
             tracked_bboxes.append(None)
             confidences.append(0.0)
         
         # Display if requested
         if args.display:
+            display_bbox = None
+            display_conf = None
+            display_occluded = True
             if result is not None and result.bbox is not None:
+                display_bbox = result.bbox
+                display_conf = result.confidence
+                display_occluded = result.is_occluded
+            elif last_bbox is not None:
+                display_bbox = last_bbox
+                display_conf = 0.0
+
+            if display_bbox is not None:
                 # Color based on confidence
-                conf = result.confidence
+                conf = display_conf if display_conf is not None else 0.0
                 color = (0, int(255 * conf), int(255 * (1 - conf)))
                 
                 frame_display = draw_bbox(
-                    frame, result.bbox, 
+                    frame, display_bbox, 
                     color=color,
                     label=f"Frame {i+1}",
                     confidence=conf
@@ -223,16 +250,35 @@ def run_tracking(args) -> dict:
                     frame_display = draw_trajectory(frame_display, trajectory)
                 
                 # Add status overlay
-                status = "TRACKING" if not result.is_occluded else "OCCLUDED"
-                status_color = (0, 255, 0) if not result.is_occluded else (0, 165, 255)
+                status = "TRACKING" if not display_occluded else "OCCLUDED"
+                status_color = (0, 255, 0) if not display_occluded else (0, 165, 255)
                 cv2.putText(frame_display, status, (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
             else:
                 frame_display = frame.copy()
                 cv2.putText(frame_display, "LOST", (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            
-            key = display_frame(frame_display, wait_key=1 if not paused else 0)
+
+            wait_key = 1
+            if paused:
+                wait_key = 0
+            elif args.display_fps and args.display_fps > 0:
+                elapsed = time.perf_counter() - frame_start
+                target = 1.0 / float(args.display_fps)
+                remaining = target - elapsed
+                if remaining > 0:
+                    wait_key = max(1, int(remaining * 1000))
+
+            if args.display:
+                h0, w0 = frame_display.shape[:2]
+                if display_scale != 1.0:
+                    frame_display = cv2.resize(
+                        frame_display,
+                        (int(w0 * display_scale), int(h0 * display_scale)),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+
+            key = display_frame(frame_display, wait_key=wait_key)
             
             if key == ord('q'):
                 print("\nTracking stopped by user")
@@ -360,12 +406,14 @@ Examples:
     parser.add_argument('--similarity', type=str, default='combined',
                        choices=['euclidean', 'correlation', 'mahalanobis', 'reconstruction', 'combined'],
                        help='Similarity metric (default: combined)')
-    parser.add_argument('--update-rate', type=int, default=3,
-                       help='Update appearance model every N frames (default: 3)')
-    parser.add_argument('--learning-rate', type=float, default=0.05,
-                       help='Learning rate for model updates (default: 0.05)')
-    parser.add_argument('--occlusion-threshold', type=float, default=0.3,
-                       help='Threshold for occlusion detection (default: 0.3)')
+    parser.add_argument('--update-rate', type=int, default=2,
+                       help='Update appearance model every N frames (default: 2)')
+    parser.add_argument('--learning-rate', type=float, default=0.08,
+                       help='Learning rate for model updates (default: 0.08)')
+    parser.add_argument('--occlusion-threshold', type=float, default=0.30,
+                       help='Threshold for occlusion detection (default: 0.30, lower = more lenient)')
+    parser.add_argument('--fast', action='store_true',
+                       help='Enable fast mode (better speed, reduced accuracy)')
     
     # Feature options
     parser.add_argument('--use-hog', action='store_true',
@@ -378,6 +426,10 @@ Examples:
     # Display/Save options
     parser.add_argument('--display', action='store_true',
                        help='Display tracking results in real-time')
+    parser.add_argument('--display-fps', type=float, default=None,
+                       help='Target display FPS (best effort, requires --display)')
+    parser.add_argument('--display-scale', type=float, default=None,
+                       help='Scale factor for display window (e.g., 2.0). If omitted, auto-scales.')
     parser.add_argument('--no-save-frames', action='store_true',
                        help='Do not save individual frames')
     parser.add_argument('--save-video', action='store_true',

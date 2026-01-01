@@ -21,6 +21,8 @@ class FeatureExtractor:
         """
         self.patch_size = patch_size
         self.use_hog = use_hog
+
+        self._offset_cache = {}
         
         # HOG parameters
         if use_hog:
@@ -31,6 +33,64 @@ class FeatureExtractor:
                 _cellSize=(8, 8),
                 _nbins=9
             )
+
+    def _get_offsets(self, effective_radius: int, step_size: int) -> List[Tuple[int, int]]:
+        key = (int(effective_radius), int(step_size))
+        cached = self._offset_cache.get(key)
+        if cached is not None:
+            return cached
+
+        r = int(effective_radius)
+        s = int(step_size)
+        offsets: List[Tuple[int, int]] = []
+        rr = r * r
+        for dy in range(-r, r + 1, s):
+            for dx in range(-r, r + 1, s):
+                if dx * dx + dy * dy > rr:
+                    continue
+                offsets.append((dx, dy))
+        offsets.sort(key=lambda p: p[0] * p[0] + p[1] * p[1])
+        self._offset_cache[key] = offsets
+        return offsets
+
+    def iter_candidates(
+        self,
+        image: np.ndarray,
+        center: Tuple[int, int],
+        base_size: Tuple[int, int],
+        search_radius: int,
+        step_size: int = 4,
+        scales: List[float] = None,
+        max_candidates: int = 200,
+    ):
+        if scales is None:
+            scales = [0.95, 1.0, 1.05]
+
+        cx, cy = center
+        base_w, base_h = base_size
+
+        max_radius = max(image.shape[0], image.shape[1]) // 2
+        effective_radius = int(min(int(search_radius), max_radius, 200))
+        offsets = self._get_offsets(effective_radius, int(step_size))
+
+        produced = 0
+        for scale in scales:
+            w = int(base_w * scale)
+            h = int(base_h * scale)
+            for dx, dy in offsets:
+                x = cx + dx - w // 2
+                y = cy + dy - h // 2
+                bbox = (x, y, w, h)
+                try:
+                    patch = self.extract_and_flatten(image, bbox)
+                except Exception:
+                    continue
+                if patch is None:
+                    continue
+                yield patch, bbox
+                produced += 1
+                if produced >= max_candidates:
+                    return
     
     def extract_patch(self, image: np.ndarray, bbox: Tuple[int, int, int, int], 
                      pad_mode: str = 'edge') -> Optional[np.ndarray]:
@@ -208,23 +268,35 @@ class FeatureExtractor:
         if len(bbox) != 4:
             raise ValueError("Bounding box must have 4 elements")
         
-        # Heuristic: if third and fourth values are larger than position values
-        # and exceed image dimensions, assume (x1, y1, x2, y2) format
-        if bbox[2] > bbox[0] and bbox[3] > bbox[1]:
-            if bbox[2] > image_shape[1] or bbox[3] > image_shape[0]:
-                # Format: (x1, y1, x2, y2)
-                x1, y1, x2, y2 = bbox
-                return (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
+        # Heuristic: try to detect (x1, y1, x2, y2) vs (x, y, w, h).
+        # Many datasets/tools provide (x1, y1, x2, y2) where x2/y2 are *within*
+        # the image dimensions, so we can't rely only on x2 > image_w.
+        #
+        # We treat it as (x1, y1, x2, y2) when:
+        # - x2 > x1 and y2 > y1 (valid corner ordering), and
+        # - interpreting it as (x, y, w, h) would push the box beyond bounds.
+        img_h, img_w = image_shape[:2]
+        x0, y0, a, b = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
+        if a > x0 and b > y0:
+            looks_like_xyxy = (
+                a > img_w or b > img_h or
+                (x0 + a > img_w) or
+                (y0 + b > img_h)
+            )
+            if looks_like_xyxy:
+                x1, y1, x2, y2 = x0, y0, a, b
+                return (x1, y1, int(x2 - x1), int(y2 - y1))
         
         # Format: (x, y, width, height)
-        return (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
+        return (x0, y0, a, b)
     
     def extract_candidates(self, image: np.ndarray, 
                           center: Tuple[int, int],
                           base_size: Tuple[int, int],
                           search_radius: int,
                           step_size: int = 4,
-                          scales: List[float] = None) -> List[Tuple[np.ndarray, Tuple[int, int, int, int]]]:
+                          scales: List[float] = None,
+                          max_candidates: int = 200) -> List[Tuple[np.ndarray, Tuple[int, int, int, int]]]:
         """
         Extract candidate patches around a center point at multiple positions and scales.
         
@@ -235,29 +307,19 @@ class FeatureExtractor:
             search_radius: Search radius in pixels
             step_size: Step size for position search
             scales: List of scale factors
+            max_candidates: Maximum number of candidates to extract
         
         Returns:
             List of (patch, bbox) tuples
         """
-        if scales is None:
-            scales = [0.95, 1.0, 1.05]
-        
-        cx, cy = center
-        base_w, base_h = base_size
-        candidates = []
-        
-        for scale in scales:
-            w = int(base_w * scale)
-            h = int(base_h * scale)
-            
-            for dy in range(-search_radius, search_radius + 1, step_size):
-                for dx in range(-search_radius, search_radius + 1, step_size):
-                    x = cx + dx - w // 2
-                    y = cy + dy - h // 2
-                    bbox = (x, y, w, h)
-                    
-                    patch = self.extract_and_flatten(image, bbox)
-                    if patch is not None:
-                        candidates.append((patch, bbox))
-        
-        return candidates
+        return list(
+            self.iter_candidates(
+                image=image,
+                center=center,
+                base_size=base_size,
+                search_radius=search_radius,
+                step_size=step_size,
+                scales=scales,
+                max_candidates=max_candidates,
+            )
+        )

@@ -1,5 +1,7 @@
 # PCA-Based Object Tracking
 
+**Repository**: [https://github.com/kent7770/Project2](https://github.com/kent7770/Project2)
+
 A Principal Component Analysis (PCA) based object tracking system for image sequences. This implementation uses PCA to build appearance models that represent objects and enable robust tracking across frames with motion prediction, occlusion handling, and multi-scale search.
 
 ## Features
@@ -24,6 +26,19 @@ A Principal Component Analysis (PCA) based object tracking system for image sequ
 pip install -r requirements.txt
 ```
 
+## Dataset
+
+This project uses the OTB100 object tracking benchmark.
+
+- **Download**: [OTB100 (Google Drive)](https://drive.google.com/drive/u/0/folders/1I-pD7n7TZ-FNsEEYS_2yID4m9cwh-4bk)
+- **Extract to**: `OTB100/` in the project root
+- **Curated subset for quick testing**: David, Girl, FaceOcc1, Car4, Walking2, Basketball, Biker, Bolt
+
+After extraction, run:
+```bash
+python main.py --input OTB100/David/img --ground-truth OTB100/David/groundtruth_rect.txt --display --fast
+```
+
 ## Quick Start
 
 ### Interactive Tracking
@@ -44,6 +59,19 @@ python main.py --input path/to/images --bbox "100,50,80,120" --output results/
 python main.py --input path/to/images --ground-truth gt.txt --output results/
 ```
 
+### Included OTB100 Sequences (Curated Subset)
+
+This project includes a small subset of OTB100 sequences for quick testing and demos:
+
+- `OTB100/David`
+- `OTB100/Girl`
+- `OTB100/FaceOcc1`
+- `OTB100/Car4`
+- `OTB100/Walking2`
+- `OTB100/Basketball`
+- `OTB100/Biker`
+- `OTB100/Bolt`
+
 ## Command Line Options
 
 ### Input/Output
@@ -62,11 +90,11 @@ python main.py --input path/to/images --ground-truth gt.txt --output results/
 | `--patch-size H W` | 64 64 | Patch size for feature extraction |
 | `--n-components` | auto | Number of PCA components |
 | `--variance-threshold` | 0.95 | Variance threshold for auto components |
-| `--search-radius` | 30 | Search radius in pixels |
+| `--search-radius` | 40 | Search radius in pixels |
 | `--similarity` | combined | Similarity metric (see below) |
 | `--update-rate` | 3 | Update model every N frames |
 | `--learning-rate` | 0.05 | Learning rate for updates |
-| `--occlusion-threshold` | 0.3 | Threshold for occlusion detection |
+| `--occlusion-threshold` | 0.15 | Threshold for occlusion detection (lower = more lenient) |
 
 ### Similarity Metrics
 
@@ -83,12 +111,15 @@ python main.py --input path/to/images --ground-truth gt.txt --output results/
 | `--use-hog` | Use HOG features instead of raw pixels |
 | `--no-motion` | Disable motion prediction |
 | `--no-multiscale` | Disable multi-scale search |
+| `--fast` | **Enable fast mode (5-10x faster, good accuracy)** |
 
 ### Display/Save Options
 
 | Option | Description |
 |--------|-------------|
 | `--display` | Display tracking in real-time |
+| `--display-fps` | Limit display playback FPS (useful for slower machines) |
+| `--display-scale` | Scale the display window (e.g., `1.5` or `2.0`) |
 | `--no-save-frames` | Don't save individual frames |
 | `--save-video` | Save result as MP4 video |
 | `--fps` | FPS for output video (default: 30) |
@@ -106,6 +137,12 @@ python main.py --input path/to/images --ground-truth gt.txt --output results/
 
 ```bash
 python main.py --input images/sequence --display
+```
+
+### Fast Mode (Recommended for Real-Time)
+
+```bash
+python main.py --input OTB100/Walking2/img --display --fast
 ```
 
 ### HOG Features with Custom Parameters
