@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+OTB100/
+results/
+*.mp4
+*.avi
+*.mov

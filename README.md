@@ -1,7 +1,5 @@
 # PCA-Based Object Tracking
 
-**Repository**: [https://github.com/kent7770/Project2](https://github.com/kent7770/Project2)
-
 A Principal Component Analysis (PCA) based object tracking system for image sequences. This implementation uses PCA to build appearance models that represent objects and enable robust tracking across frames with motion prediction, occlusion handling, and multi-scale search.
 
 ## Features
